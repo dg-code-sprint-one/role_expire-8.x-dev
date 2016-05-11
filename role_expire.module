@@ -1,0 +1,196 @@
+<?php 
+
+use Drupal\Core\Form\FormStateInterface;
+/**
+ * API function; Get expiration time of a user role.
+ * @param $uid
+ *   User ID.
+ * @param $rid
+ *   Role ID.
+ * @return
+ *  Array with the expiration time.
+ */
+function role_expire_get_user_role_expiry_time($uid, $rid) {
+  $result = db_select('role_expire', 'r')->fields('r', array('expiry_timestamp'))->condition('r.uid', $uid, '=')->condition('r.rid', $rid, '=')->execute()->fetchField();
+  // kint($result);die;
+  return (!empty($result)) ? $result : '';
+}
+/**
+ * API function; Get expiration of all roles of a user.
+ * @param $uid
+ *   User ID.
+ * @return
+ *  Array with the expiration time.
+ */
+function role_expire_get_all_user_records($uid) {
+  $return = array();
+  $result = db_select('role_expire', 'r')->fields('r', array('rid', 'expiry_timestamp'))->condition('r.uid', $uid, '=')->execute()->fetchAll();
+  foreach ($result as $row) {
+    $return[$row->rid] = $row->expiry_timestamp;
+  }
+  return $return;
+}
+/**
+ * API function; Delete a record from the database.
+ *
+ * @param $uid
+ *   User ID.
+ * @param $rid
+ *   Role ID.
+ * @return
+ */
+function role_expire_delete_record($uid, $rid) {
+  db_delete('role_expire')
+  ->condition('uid', $uid)
+  ->condition('rid', $rid)
+  ->execute();
+}
+/**
+ * API function; Delete all user expirations.
+ *
+ * @param $uid
+ *   User ID.
+ * @return
+ */
+function role_expire_delete_user_records($uid) {
+  db_delete('role_expire')
+  ->condition('uid', $uid)
+  ->execute();
+}
+/**
+ * API function; Insert or update a record in the database.
+ *
+ * @param $uid
+ *   User ID.
+ * @param $rid
+ *   Role ID.
+ * @param $expiry_time
+ *   The expiration timestamp.
+ */
+function role_expire_write_record($uid, $rid, $expiry_timestamp) {
+  $existing = db_select('r', 'role_expire');
+  $existing->fields('r', array('expiry_timestamp'))
+  ->condition('r.uid', $uid, '=')
+  ->condition('r.rid', $rid, '=')
+  ->execute()->fetchField();
+  if ($existing && $expiry_timestamp != $existing) {
+    $result =  db_update('role_expire')
+               ->fields(array(
+                 'expiry_timestamp' => $expiry_timestamp,
+               ))
+               ->condition('uid', $uid)
+               ->condition('rid', $rid)
+               ->execute();
+  }
+  elseif ($existing == FALSE) {
+    $id = db_insert('role_expire')
+          ->fields(array(
+            'uid' => $uid,
+            'rid' => $rid,
+            'expiry_timestamp' => $expiry_timestamp,
+          ))
+          ->execute();
+  }
+}
+/**
+ * API function; Get the default duration for a role.
+ * @param $rid
+ *   Required. The role_id to check.
+ * @return
+ *  String containing the strtotime compatible default duration of the role
+ *  or empty string if not set.
+ */
+function role_expire_get_default_duration($rid) {
+	$result = db_select('role_expire_length', 'rl')
+	          ->fields('rl', array('duration'))
+	          ->condition('rl.rid', $rid, '=')
+	          ->fetchField();
+  return (!empty($result)) ? $result : '';
+}
+
+/**
+ * Implements hook_form_FORM-ID_alter().
+ */
+function role_expire_form_user_form_alter(&$form, $form_state) {
+  $form = array_merge_recursive($form, role_expire_add_expiration_input($form['#user']));
+}
+/**
+ * Add form element that accepts the role expiration time.
+ *
+ * @param $account
+ *   The user object.
+ * @return
+ *   Form element.
+ */
+function role_expire_add_expiration_input($account = NULL) {
+  $form = array();
+  $account = \Drupal::currentUser();
+  if (\Drupal::currentUser()->hasPermission('administer role expire') || \Drupal::currentUser()->hasPermission('administer users')) {
+    // drupal_add_js(drupal_get_path('module', 'role_expire') . '/role_expire.js');
+    $form['roles']['#attributes'] = array('class' => array('role-expire-roles'));
+
+    foreach (_role_expire_get_role() as $rid => $role) {
+      if (is_object($account) && $account->id() != '') {
+        $expiry_timestamp = role_expire_get_user_role_expiry_time($account->uid, $rid);
+      }
+      else {
+        $expiry_timestamp = '';
+      }
+
+      $form['role_expire_' . $rid] = array(
+        '#title' => t("%role role expiration date/time", array('%role' => ucfirst($role->label()))),
+        '#type' => 'textfield',
+        '#default_value' => !empty($expiry_timestamp) ? date("Y-m-d H:i:s", $expiry_timestamp) : '',
+        '#attributes' => array('class' => array('role-expire-role-expiry')),
+        '#description' => t("Leave blank for default role expiry (never, or the duration you have set for the role), enter date and time in format: <em>yyyy-mm-dd hh:mm:ss</em> or use relative time i.e. 1 day, 2 months, 1 year, 3 years.")
+      );
+    }
+
+    $form['#validate'][] = '_role_expire_validate_role_expires';
+  }
+  return $form;
+}
+/**
+ * Form validation handler for the role expiration on the user_profile_form().
+ *
+ * @see user_profile_form()
+ */
+function _role_expire_validate_role_expires(&$form, FormStateInterface &$form_state) {
+
+  $time = REQUEST_TIME;
+
+  foreach ($form_state->getValues() as $name => $value) {
+    if (strpos($name, 'role_expire_') === 0 && trim($value)!= '')
+    {
+    	$expiry_time = strtotime($value);
+      if (!$expiry_time) {
+         $form_state->setErrorByName($name, t('Role expiry is not in correct format.'));
+      }
+      if ($expiry_time <= $time) {
+        $form_state->setErrorByName($name, t('Role expiry must be in the future.'));
+      }
+    }
+  }
+}	
+/**
+ * Helper function; Get valid roles.
+ * @return unknown_type
+ */
+function _role_expire_get_role() {
+  $roles = user_roles(TRUE);
+  unset($roles[DRUPAL_AUTHENTICATED_RID]);
+  return $roles;
+}
+/**
+*Implementation hook_ENTITY_TYPE_insert()
+*/
+function hook_user_insert(Drupal\Core\Entity\EntityInterface $entity) {
+print "test";
+}
+/**
+*Implementation hook_ENTITY_TYPE_update()
+*/
+function role_expire_user_update(Drupal\Core\Entity\EntityInterface $entity) {
+// kint($entity);die;
+// role_expire_write_record(1,3,);
+}

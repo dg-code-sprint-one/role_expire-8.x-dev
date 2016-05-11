@@ -1,0 +1,3 @@
+administer role expire:
+  title: 'Administer Role Expire'
+  description: 'For each role, manage default role expiration dates (admin/people/permissions/roles/edit/#) and user role expiration dates (user/#/edit).'

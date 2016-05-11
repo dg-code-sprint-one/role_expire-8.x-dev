@@ -1,0 +1,6 @@
+name: Role Expire
+type: module
+description: 'Enables user roles to expire on given time and day.'
+package: Others
+core: 8.x
+hidden: false
